@@ -242,8 +242,14 @@ func generateObjectID() (string, error) {
 //	 "verified":true}
 type ghostSessionData struct {
 	Cookie   ghostCookieMeta `json:"cookie"`
-	UserID   string          `json:"user_id"`
-	Verified bool            `json:"verified"`
+	UserID         string `json:"user_id"`
+	Verified       bool   `json:"verified"`
+	// VerifiedUserID binds the verification to a specific user. Ghost's
+	// isVerifiedSession() (added for staff device verification) now requires
+	// verified_user_id to be set and equal to user_id — verified:true alone
+	// is no longer sufficient and Ghost "fails closed" without it, silently
+	// treating the request as unauthenticated (req.user never gets set).
+	VerifiedUserID string `json:"verified_user_id"`
 	// Origin, UserAgent, and IP are populated by Ghost's own session handler when
 	// a user logs in interactively. We cannot replicate them without access to the
 	// original HTTP request context in this adapter. Ghost currently does not
@@ -306,8 +312,9 @@ func buildSessionData(userID string, maxAgeDays int) (string, error) {
 			// "none" requires Secure=true, which we always set.
 			SameSite: "none",
 		},
-		UserID:   userID,
-		Verified: true,
+		UserID:         userID,
+		Verified:       true,
+		VerifiedUserID: userID,
 		// Origin, UserAgent, and IP are unknown at session-creation time in this
 		// adapter. Empty strings are stored so the JSON structure stays consistent
 		// with what Ghost writes; Ghost does not validate these fields on auth.
