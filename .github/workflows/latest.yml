@@ -1,7 +1,10 @@
-name: Publish :latest
+name: Publish Docker image
 
 on:
   push:
+    branches:
+      - main
+  pull_request:
     branches:
       - main
 
@@ -21,7 +24,7 @@ jobs:
         run: go test -race ./...
 
   docker:
-    name: Build & push :latest
+    name: Build & push image
     needs: test
     runs-on: ubuntu-latest
     permissions:
@@ -37,12 +40,38 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # A PR from a fork gets a read-only GITHUB_TOKEN, so it can never push to
+      # GHCR. We still build the image on fork PRs (to catch a broken Dockerfile
+      # in review) — we just don't push it. Same-repo PRs and pushes to main do push.
+      - name: Determine whether to push
+        id: push
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ] || [ "${{ github.event.pull_request.head.repo.full_name }}" == "${{ github.repository }}" ]; then
+            echo "push=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "push=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Log in to GHCR
+        if: steps.push.outputs.push == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Tags: pushes to main get :latest and :main-<sha>; PRs get :pr-<number>
+      # and :pr-<number>-<sha> so each PR revision has its own pullable tag.
+      - name: Compute image tags & labels
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/ghost-sso-proxy
+          tags: |
+            type=raw,value=latest,enable=${{ github.event_name == 'push' }}
+            type=raw,value=main-${{ github.sha }},enable=${{ github.event_name == 'push' }}
+            type=raw,value=pr-${{ github.event.pull_request.number }},enable=${{ github.event_name == 'pull_request' }}
+            type=raw,value=pr-${{ github.event.pull_request.number }}-${{ github.sha }},enable=${{ github.event_name == 'pull_request' }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -50,13 +79,8 @@ jobs:
           context: .
           file: Dockerfile
           platforms: linux/amd64
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/ghost-sso-proxy:latest
-            ghcr.io/${{ github.repository_owner }}/ghost-sso-proxy:main-${{ github.sha }}
+          push: ${{ steps.push.outputs.push == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          labels: |
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.revision=${{ github.sha }}
-            org.opencontainers.image.created=${{ github.event.head_commit.timestamp }}
